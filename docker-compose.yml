@@ -1,0 +1,78 @@
+# docker-compose.yml
+# Use this to run a local Kafka cluster with AKHQ UI for FeatureLens development and testing.
+version: '3.7'
+
+services:
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.9.0
+    container_name: zookeeper
+    ports:
+      - "2181:2181"
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    volumes:
+      - zookeeper_data:/data
+      - zookeeper_log:/datalog
+    networks:
+      - featurelens-net
+
+  kafka:
+    image: confluentinc/cp-kafka:7.9.0
+    container_name: kafka
+    ports:
+      # Expose Kafka's port 9092 to the host machine for FeatureLens/producer connection
+      - "9092:9092"
+    depends_on:
+      - zookeeper
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: 'zookeeper:2181'
+      # --- Listener Configuration ---
+      # Define listeners: INTERNAL for container-to-container, EXTERNAL for host-to-container
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: INTERNAL:PLAINTEXT,EXTERNAL:PLAINTEXT
+      # Define advertised listeners: What clients use to connect
+      # For INTERNAL, use the service name 'kafka' and port 9093 (or another internal port)
+      # For EXTERNAL, use 'localhost' (host machine) and port 9092 (exposed port)
+      KAFKA_ADVERTISED_LISTENERS: INTERNAL://kafka:9093,EXTERNAL://localhost:9092
+      # Define listeners the broker binds to: Listen on all interfaces for both ports
+      KAFKA_LISTENERS: INTERNAL://0.0.0.0:9093,EXTERNAL://0.0.0.0:9092
+      # Specify which listener the broker uses for internal communication (replication, etc.)
+      KAFKA_INTER_BROKER_LISTENER_NAME: INTERNAL
+      # --- Other Settings ---
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: 'true'
+    volumes:
+      - kafka_data:/var/lib/kafka/data
+    networks:
+      - featurelens-net
+
+  akhq:
+    image: tchiotludo/akhq:0.25.1
+    container_name: akhq
+    ports:
+      - "8080:8080"
+    depends_on:
+      - kafka
+    environment:
+      AKHQ_CONFIGURATION: |
+        akhq:
+          connections:
+            docker-kafka-cluster:
+              properties:
+                # Connect using the INTERNAL listener defined in Kafka's environment
+                bootstrap.servers: "kafka:9093" # Use internal listener address
+    networks:
+      - featurelens-net
+
+networks:
+  featurelens-net:
+    driver: bridge
+
+volumes:
+  zookeeper_data:
+  zookeeper_log:
+  kafka_data:
