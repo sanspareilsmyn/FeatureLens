@@ -23,9 +23,9 @@ const (
 type FeatureMessage struct {
 	Timestamp   time.Time `json:"timestamp"`
 	UserID      string    `json:"user_id"`
-	FeatureA    *float64  `json:"feature_a"` // Pointer to allow nulls
+	FeatureA    *float64  `json:"feature_a"`
 	FeatureB    *float64  `json:"feature_b"`
-	FeatureC    *string   `json:"feature_c"` // Example categorical
+	FeatureC    *string   `json:"feature_c"`
 	ProcessTime int       `json:"process_time_ms"`
 }
 
