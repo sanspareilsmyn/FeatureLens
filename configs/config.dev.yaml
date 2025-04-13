@@ -1,0 +1,49 @@
+# configs/config.dev.yaml
+# Configuration for local development environment
+log:
+  level: "info" # Or "info", "warn", "error"
+  format: "console" # Use "json" for production usually
+  fileLoggingEnabled: true # Set to true to enable file logging
+  directory: "log/"         # Directory to store log files (relative or absolute)
+  filename: "featurelens-dev.log" # Log file name
+  maxSize: 50              # Max size in megabytes before rotating
+  maxBackups: 5             # Max number of old log files to keep
+  maxAge: 14                # Max number of days to keep old log files
+  compress: false           # Compress rotated files (true/false)
+
+kafka:
+  brokers: ["localhost:9092"]
+  topic: "feature-stream"
+  groupID: "featurelens-dev-group"
+
+pipeline:
+  windowSize: "1m"
+
+features:
+  # Monitor feature_a (numerical) - From sample producer
+  - name: "feature_a"
+    metricType: "numerical"
+    thresholds:
+      # Producer sends ~10% nulls, alert if it exceeds 20%
+      nullRate: 0.10
+      # Producer mean is ~10, stddev ~2. Alert if outside a reasonable range.
+      meanMin: 7.0
+      meanMax: 13.0
+      stdDevMax: 4.0
+
+  # Monitor feature_b (numerical) - From sample producer
+  - name: "feature_b"
+    metricType: "numerical"
+    thresholds:
+      # Producer sends ~5% nulls, alert if it exceeds 15%
+      nullRate: 0.05
+      # Producer values are between 50-60
+      meanMin: 48.0
+      meanMax: 62.0
+
+  # Monitor process_time_ms (numerical) - From sample producer
+  - name: "process_time_ms"
+    metricType: "numerical"
+    thresholds:
+      # Producer values are 10-49ms. Alert if average goes too high.
+      meanMax: 100.0
