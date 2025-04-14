@@ -5,10 +5,13 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 
@@ -50,6 +53,19 @@ func main() {
 	)
 	sugar.Infow("Configuration loaded successfully", "path", *configFile)
 
+	// Start Prometheus Metrics Server
+	metricsAddr := ":8081"
+	metricsSrv := &http.Server{Addr: metricsAddr}
+
+	go func() {
+		sugar.Infow("Starting Prometheus metrics server", "address", metricsAddr)
+		http.Handle("/metrics", promhttp.Handler())
+		if err := metricsSrv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			sugar.Errorw("Metrics server failed unexpectedly", "error", err)
+		}
+		sugar.Info("Metrics server stopped.")
+	}()
+
 	// Initialize Pipeline
 	sugar.Info("Initializing pipeline...")
 	pipe, err := pipeline.New(cfg, logger)
@@ -75,6 +91,16 @@ func main() {
 	sugar.Info("Starting monitoring pipeline...")
 	runErr := pipe.Run(ctx)
 
+	// Graceful Shutdown of Metrics Server
+	sugar.Info("Attempting to shut down metrics server gracefully...")
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer shutdownCancel()
+	if err := metricsSrv.Shutdown(shutdownCtx); err != nil {
+		sugar.Warnw("Metrics server shutdown error", "error", err)
+	} else {
+		sugar.Info("Metrics server shutdown complete.")
+	}
+
 	// Evaluate Pipeline Result
 	finalLogLevel := zapcore.InfoLevel
 	shutdownReason := "gracefully"
@@ -85,8 +111,9 @@ func main() {
 		sugar.Info("Pipeline execution completed without error.")
 	case errors.Is(runErr, context.Canceled):
 		sugar.Info("Pipeline execution cancelled (expected on shutdown).")
+		shutdownReason = "gracefully via signal"
 	default: // Unexpected error
-		shutdownReason = "due to error"
+		shutdownReason = "due to pipeline error"
 		finalLogLevel = zapcore.ErrorLevel
 		finalErrorField = zap.Error(runErr)
 		sugar.Errorw("Pipeline execution stopped unexpectedly", zap.Error(runErr))
@@ -101,4 +128,10 @@ func main() {
 	// Application Exit
 	sugar.Info("Shutting down application...")
 	sugar.Info("FeatureLens finished.")
+
+	// Exit with appropriate code if there was an unexpected error from the pipeline
+	if runErr != nil && !errors.Is(runErr, context.Canceled) {
+		os.Exit(1)
+	}
+	os.Exit(0)
 }

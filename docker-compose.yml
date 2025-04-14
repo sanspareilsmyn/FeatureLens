@@ -68,6 +68,36 @@ services:
     networks:
       - featurelens-net
 
+  prometheus:
+    image: prom/prometheus:v2.53.4
+    container_name: prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
+      - prometheus_data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/usr/share/prometheus/console_libraries'
+      - '--web.console.templates=/usr/share/prometheus/consoles'
+      - '--web.enable-lifecycle'
+    networks:
+      - featurelens-net
+
+  grafana:
+    image: grafana/grafana:11.6.0
+    container_name: grafana
+    ports:
+      - "3000:3000"
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./grafana/provisioning:/etc/grafana/provisioning
+    environment:
+      GF_INSTALL_PLUGINS: grafana-clock-panel,grafana-piechart-panel
+    networks:
+      - featurelens-net
+
 networks:
   featurelens-net:
     driver: bridge
@@ -76,3 +106,5 @@ volumes:
   zookeeper_data:
   zookeeper_log:
   kafka_data:
+  prometheus_data:
+  grafana_data:
