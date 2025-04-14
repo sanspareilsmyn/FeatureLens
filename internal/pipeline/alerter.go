@@ -5,9 +5,58 @@ import (
 	"math"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promauto"
 	"go.uber.org/zap"
 
 	"github.com/sanspareilsmyn/featurelens/internal/config"
+)
+
+// Prometheus Metrics Definition
+var (
+	featureCount = promauto.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "featurelens_feature_window_count_total", // Follow Prometheus naming conventions
+			Help: "Total number of messages processed for a feature in the last window.",
+		},
+		[]string{"feature_name"}, // Label: feature_name
+	)
+	featureNullCount = promauto.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "featurelens_feature_window_null_count_total",
+			Help: "Total number of null values encountered for a feature in the last window.",
+		},
+		[]string{"feature_name"},
+	)
+	featureNullRate = promauto.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "featurelens_feature_window_null_rate",
+			Help: "Null rate for a feature in the last window (NullCount / Count).",
+		},
+		[]string{"feature_name"},
+	)
+	featureMean = promauto.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "featurelens_feature_window_mean_value",
+			Help: "Mean value for a feature in the last window.",
+		},
+		[]string{"feature_name"},
+	)
+	featureStdDev = promauto.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "featurelens_feature_window_stddev_value",
+			Help: "Standard deviation for a feature in the last window.",
+		},
+		[]string{"feature_name"},
+	)
+	// Optional: Track violations
+	featureThresholdViolations = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "featurelens_feature_threshold_violations_total",
+			Help: "Total number of threshold violations detected for a feature and specific check.",
+		},
+		[]string{"feature_name", "check_type", "comparison"}, // Labels: feature_name, check_type (e.g., mean, null_rate), comparison (<, >)
+	)
 )
 
 // Alerter receives aggregation results and checks them against configured thresholds.
@@ -46,7 +95,7 @@ func (a *Alerter) Run(ctx context.Context) error {
 				sugar.Info("Alerter input channel closed.")
 				return nil
 			}
-			a.checkThresholds(ctx, result)
+			a.processResult(ctx, result)
 
 		case <-ctx.Done():
 			sugar.Info("Context cancelled, stopping alerter.")
@@ -55,41 +104,60 @@ func (a *Alerter) Run(ctx context.Context) error {
 	}
 }
 
-// checkThresholds compares the result against configured thresholds and logs alerts.
-func (a *Alerter) checkThresholds(ctx context.Context, result AggregationResult) {
+// processResult checks thresholds, logs alerts, and updates Prometheus metrics.
+func (a *Alerter) processResult(ctx context.Context, result AggregationResult) {
 	sugar := a.logger.Sugar()
+	featureName := result.FeatureName
 
-	featureCfg, exists := a.features[result.FeatureName]
+	featureCfg, exists := a.features[featureName]
 	if !exists {
-		sugar.Warnw("Received result for unconfigured feature",
-			zap.String("feature_name", result.FeatureName),
+		sugar.Warnw("Received result for unconfigured feature, skipping metric update",
+			zap.String("feature_name", featureName),
 			zap.Time("window_start", result.WindowStart),
 			zap.Time("window_end", result.WindowEnd),
 		)
 		return
 	}
 
-	thresholds := featureCfg.Thresholds
-	featureName := result.FeatureName
-
-	// Pre-calculate metrics to avoid redundant checks/calculations
-	nullRate := math.NaN()
+	// Calculate Metrics
+	nullRateVal := math.NaN()
 	if result.Count > 0 {
-		nullRate = float64(result.NullCount) / float64(result.Count)
+		nullRateVal = float64(result.NullCount) / float64(result.Count)
 	}
 
-	stdDev := math.NaN()
+	stdDevVal := math.NaN()
 	if !math.IsNaN(result.Variance) && result.Variance >= 0 {
-		stdDev = math.Sqrt(result.Variance)
+		stdDevVal = math.Sqrt(result.Variance)
 	}
 
-	// --- Perform Threshold Checks ---
-	a.checkNullRate(sugar, featureName, result.WindowEnd, nullRate, thresholds.NullRate)
-	a.checkMean(sugar, featureName, result.WindowEnd, result.Mean, thresholds.MeanMin, thresholds.MeanMax)
-	a.checkStdDev(sugar, featureName, result.WindowEnd, stdDev, thresholds.StdDevMin, thresholds.StdDevMax)
+	// Update Prometheus Gauges
+	// Use .WithLabelValues(featureName) to get the specific gauge for this feature
+	featureCount.WithLabelValues(featureName).Set(float64(result.Count))
+	featureNullCount.WithLabelValues(featureName).Set(float64(result.NullCount))
+	if !math.IsNaN(nullRateVal) {
+		featureNullRate.WithLabelValues(featureName).Set(nullRateVal)
+	} else {
+		featureNullRate.WithLabelValues(featureName).Set(0)
+	}
+	if !math.IsNaN(result.Mean) {
+		featureMean.WithLabelValues(featureName).Set(result.Mean)
+	} else {
+		featureMean.WithLabelValues(featureName).Set(0)
+	}
+	if !math.IsNaN(stdDevVal) {
+		featureStdDev.WithLabelValues(featureName).Set(stdDevVal)
+	} else {
+		featureStdDev.WithLabelValues(featureName).Set(0)
+	}
 
-	// --- Log Statistics ---
-	a.logStats(sugar, result, nullRate, stdDev)
+	// Perform Threshold Checks & Log
+	thresholds := featureCfg.Thresholds
+	a.checkNullRate(sugar, featureName, result.WindowEnd, nullRateVal, thresholds.NullRate)
+	a.checkMean(sugar, featureName, result.WindowEnd, result.Mean, thresholds.MeanMin, thresholds.MeanMax)
+	a.checkStdDev(sugar, featureName, result.WindowEnd, stdDevVal, thresholds.StdDevMin, thresholds.StdDevMax)
+
+	// Log Statistics
+	a.logStats(sugar, result, nullRateVal, stdDevVal)
 }
 
 // Helper function to check Null Rate threshold
@@ -97,7 +165,6 @@ func (a *Alerter) checkNullRate(sugar *zap.SugaredLogger, featureName string, wi
 	if threshold == nil || math.IsNaN(actualRate) {
 		return
 	}
-
 	if actualRate > *threshold {
 		sugar.Warnw("Null Rate violation",
 			zap.String("feature_name", featureName),
@@ -106,15 +173,16 @@ func (a *Alerter) checkNullRate(sugar *zap.SugaredLogger, featureName string, wi
 			zap.Float64("threshold", *threshold),
 			zap.String("comparison", ">"),
 		)
+		// Increment violation counter
+		featureThresholdViolations.WithLabelValues(featureName, "null_rate", ">").Inc()
 	}
 }
 
 // Helper function to check Mean thresholds
 func (a *Alerter) checkMean(sugar *zap.SugaredLogger, featureName string, windowEnd time.Time, actualMean float64, minThreshold, maxThreshold *float64) {
 	if math.IsNaN(actualMean) {
-		return // Mean not calculable
+		return
 	}
-
 	if minThreshold != nil && actualMean < *minThreshold {
 		sugar.Warnw("Mean violation (Min)",
 			zap.String("feature_name", featureName),
@@ -123,6 +191,7 @@ func (a *Alerter) checkMean(sugar *zap.SugaredLogger, featureName string, window
 			zap.Float64("threshold", *minThreshold),
 			zap.String("comparison", "<"),
 		)
+		featureThresholdViolations.WithLabelValues(featureName, "mean", "<").Inc()
 	}
 	if maxThreshold != nil && actualMean > *maxThreshold {
 		sugar.Warnw("Mean violation (Max)",
@@ -132,15 +201,15 @@ func (a *Alerter) checkMean(sugar *zap.SugaredLogger, featureName string, window
 			zap.Float64("threshold", *maxThreshold),
 			zap.String("comparison", ">"),
 		)
+		featureThresholdViolations.WithLabelValues(featureName, "mean", ">").Inc()
 	}
 }
 
 // Helper function to check Standard Deviation thresholds
 func (a *Alerter) checkStdDev(sugar *zap.SugaredLogger, featureName string, windowEnd time.Time, actualStdDev float64, minThreshold, maxThreshold *float64) {
 	if math.IsNaN(actualStdDev) {
-		return // StdDev not calculable
+		return
 	}
-
 	if minThreshold != nil && actualStdDev < *minThreshold {
 		sugar.Warnw("StdDev violation (Min)",
 			zap.String("feature_name", featureName),
@@ -149,6 +218,7 @@ func (a *Alerter) checkStdDev(sugar *zap.SugaredLogger, featureName string, wind
 			zap.Float64("threshold", *minThreshold),
 			zap.String("comparison", "<"),
 		)
+		featureThresholdViolations.WithLabelValues(featureName, "stddev", "<").Inc()
 	}
 	if maxThreshold != nil && actualStdDev > *maxThreshold {
 		sugar.Warnw("StdDev violation (Max)",
@@ -158,6 +228,7 @@ func (a *Alerter) checkStdDev(sugar *zap.SugaredLogger, featureName string, wind
 			zap.Float64("threshold", *maxThreshold),
 			zap.String("comparison", ">"),
 		)
+		featureThresholdViolations.WithLabelValues(featureName, "stddev", ">").Inc()
 	}
 }
 
