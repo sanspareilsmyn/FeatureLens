@@ -44,9 +44,10 @@ By providing timely insights into feature health, FeatureLens helps MLOps teams 
 *   **Configuration:** Load settings (Kafka brokers, topics, features to monitor, window size, thresholds) from a configuration file (e.g., YAML).
 *   **Dockerized Infrastructure:** Provides a `docker-compose.yml` to easily run Kafka, Zookeeper, Prometheus, Grafana, and AKHQ for local development and testing.
 
-## 🏗️ Architecture
+## 🏗️ Architecture (Local Development)
 
 FeatureLens runs as a **local Go process** during development, connecting to infrastructure components managed by **Docker Compose**. Prometheus (in Docker) scrapes metrics from the local FeatureLens process.
+The architecture is designed to facilitate local development and testing, while also being suitable for production deployments.
 
 ```text
 +-----------------------------------------------------+         +--------------------------------------+
