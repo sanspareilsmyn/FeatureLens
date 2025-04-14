@@ -1,4 +1,4 @@
-# Contributing to FeatureLens 🔭렌즈
+# Contributing to FeatureLens
 
 First off, thank you for considering contributing to FeatureLens! 🎉 We welcome any help to make this project better. Whether it's reporting a bug, proposing a new feature, improving documentation, or writing code, your contribution is valuable.
 
